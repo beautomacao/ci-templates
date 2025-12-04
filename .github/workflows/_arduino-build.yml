@@ -61,25 +61,30 @@ jobs:
       BOARD_OPTIONS: ${{ inputs.board_options }}
 
     steps:
-
       # --------------------------------------------------------------------
       # CHECKOUT
       # --------------------------------------------------------------------
       - name: Checkout do repositório
         uses: actions/checkout@v4
 
-
       # --------------------------------------------------------------------
-      # ARDUINO CLI
+      # INSTALAR ARDUINO CLI (SEM ACTION EXTERNA)
       # --------------------------------------------------------------------
-      - name: Setup Arduino CLI
-        uses: arduino/setup-arduino-cli@v2
-
+      - name: Instalar Arduino CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Baixando e instalando arduino-cli via script oficial..."
+          curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | \
+            BINDIR="$HOME/bin" sh
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+          arduino-cli version
 
       # --------------------------------------------------------------------
       # BOARD MANAGER URLs
       # --------------------------------------------------------------------
       - name: Configurar Board Manager URLs
+        shell: bash
         run: |
           set -euo pipefail
           arduino-cli config init
@@ -88,7 +93,6 @@ jobs:
           arduino-cli config add board_manager.additional_urls https://arduino.esp8266.com/stable/package_esp8266com_index.json
           arduino-cli config dump
           arduino-cli core update-index
-
 
       # --------------------------------------------------------------------
       # SELECT FQBN
@@ -105,11 +109,11 @@ jobs:
           print(f"FQBN selecionado: {fqbn}")
           open("/tmp/fqbn.txt","w").write(fqbn)
 
-
       # --------------------------------------------------------------------
       # INSTALL CORES
       # --------------------------------------------------------------------
       - name: Instalar core do board
+        shell: bash
         run: |
           set -euo pipefail
           FQBN="$(cat /tmp/fqbn.txt)"
@@ -139,7 +143,6 @@ jobs:
           echo "=== Cores instalados ==="
           arduino-cli core list
 
-
       # --------------------------------------------------------------------
       # INSTALL LIBRARIES (GLOBAL + EXTRA)
       # --------------------------------------------------------------------
@@ -163,7 +166,6 @@ jobs:
           )
 
           EXTRA_LIBS="${{ inputs.arduino_libs }}"
-
           ALL_LIBS=$(printf "%s\n%s\n" "$BASE_LIBS" "$EXTRA_LIBS")
 
           echo "=== Bibliotecas a instalar ==="
@@ -181,34 +183,55 @@ jobs:
             echo "Instalando '$lib'"
             ok=false
 
+            # Tentativas via Library Manager
             if arduino-cli lib install "$lib"; then ok=true; fi
             if [ "$ok" = false ] && [ -n "$ver" ]; then arduino-cli lib install "$name@$ver" && ok=true || true; fi
             if [ "$ok" = false ]; then arduino-cli lib install "$name" && ok=true || true; fi
 
+            # Alias com "_" -> " "
             if [ "$ok" = false ]; then
               alt="$(echo "$name" | sed 's/_/ /g')"
-              [ "$alt" != "$name" ] && arduino-cli lib install "$alt${ver:+@$ver}" && ok=true || true
+              if [ "$alt" != "$name" ]; then
+                arduino-cli lib install "$alt${ver:+@$ver}" && ok=true || true
+              fi
             fi
 
+            # Fallbacks GitHub específicos
             if [ "$ok" = false ]; then
               case "$lname" in
                 asyncmqttclient)
+                  echo "→ Fallback GitHub: AsyncMqttClient"
                   git clone --depth 1 https://github.com/marvinroger/async-mqtt-client.git /tmp/AsyncMqttClient
                   mkdir -p ~/Arduino/libraries
-                  cp -r /tmp/AsyncMqttClient ~/Arduino/libraries/
+                  cp -r /tmp/AsyncMqttClient ~/Arduino/libraries/AsyncMqttClient
                   ok=true
                   ;;
+
                 espasyncwebserver)
+                  echo "→ Fallback GitHub: ESPAsyncWebServer (ESP32Async)"
                   git clone --depth 1 https://github.com/ESP32Async/ESPAsyncWebServer.git /tmp/ESPAsyncWebServer
                   mkdir -p ~/Arduino/libraries
-                  cp -r /tmp/ESPAsyncWebServer ~/Arduino/libraries/
+                  cp -r /tmp/ESPAsyncWebServer ~/Arduino/libraries/ESPAsyncWebServer
                   ok=true
                   ;;
+
                 asynctcp)
+                  echo "→ Fallback GitHub: AsyncTCP"
                   git clone --depth 1 https://github.com/ESP32Async/AsyncTCP.git /tmp/AsyncTCP || \
                   git clone --depth 1 https://github.com/me-no-dev/AsyncTCP.git /tmp/AsyncTCP
                   mkdir -p ~/Arduino/libraries
-                  cp -r /tmp/AsyncTCP ~/Arduino/libraries/
+                  cp -r /tmp/AsyncTCP ~/Arduino/libraries/AsyncTCP
+                  ok=true
+                  ;;
+
+                pcf8574)
+                  echo "→ Fallback GitHub: PCF8574_library (Renzo Mischianti / xreef)"
+                  # Remove qualquer versão instalada pelo Library Manager (ex.: RobTillaart)
+                  rm -rf ~/Arduino/libraries/PCF8574 || true
+                  git clone --depth 1 https://github.com/xreef/PCF8574_library.git /tmp/PCF8574
+                  mkdir -p ~/Arduino/libraries
+                  # mantemos o nome da pasta como PCF8574 para o include <PCF8574.h> continuar funcionando
+                  cp -r /tmp/PCF8574 ~/Arduino/libraries/PCF8574
                   ok=true
                   ;;
               esac
@@ -221,7 +244,6 @@ jobs:
 
             echo "✅ OK: $lib"
           done
-
 
       # --------------------------------------------------------------------
       # FIX FORKS (ESP32/ESP8266)
@@ -240,8 +262,8 @@ jobs:
             git clone --depth 1 https://github.com/ESP32Async/AsyncTCP.git /tmp/AsyncTCP
             git clone --depth 1 https://github.com/ESP32Async/ESPAsyncWebServer.git /tmp/ESPAsyncWebServer
 
-            cp -r /tmp/AsyncTCP ~/Arduino/libraries/
-            cp -r /tmp/ESPAsyncWebServer ~/Arduino/libraries/
+            cp -r /tmp/AsyncTCP ~/Arduino/libraries/AsyncTCP
+            cp -r /tmp/ESPAsyncWebServer ~/Arduino/libraries/ESPAsyncWebServer
 
           elif echo "$FQBN" | grep -qi '^esp8266:esp8266:'; then
             echo "→ Usando libs originais (me-no-dev)"
@@ -250,16 +272,14 @@ jobs:
             git clone --depth 1 https://github.com/me-no-dev/AsyncTCP.git /tmp/AsyncTCP
             git clone --depth 1 https://github.com/me-no-dev/ESPAsyncWebServer.git /tmp/ESPAsyncWebServer
 
-            cp -r /tmp/AsyncTCP ~/Arduino/libraries/
-            cp -r /tmp/ESPAsyncWebServer ~/Arduino/libraries/
-
+            cp -r /tmp/AsyncTCP ~/Arduino/libraries/AsyncTCP
+            cp -r /tmp/ESPAsyncWebServer ~/Arduino/libraries/ESPAsyncWebServer
           else
             echo "→ FQBN não é ESP32 nem ESP8266; nenhum fork especial aplicado."
           fi
 
           echo "=== Bibliotecas instaladas ==="
           ls -1 ~/Arduino/libraries
-
 
       # --------------------------------------------------------------------
       # FIND .INO
@@ -277,7 +297,6 @@ jobs:
             pat="$(echo "$g" | xargs)"
             [ -z "$pat" ] && continue
 
-            # usa process substitution, NÃO pipeline, para não perder o array "files"
             while IFS= read -r -d '' f; do
               files+=("${f#./}")
             done < <(find . -path "./.git" -prune -o -type f -iname "$pat" -print0)
@@ -290,8 +309,6 @@ jobs:
 
           echo "SKETCH=${files[0]}" >> "$GITHUB_OUTPUT"
           echo "Sketch selecionado: ${files[0]}"
-
-
 
       # --------------------------------------------------------------------
       # BUILD
@@ -323,7 +340,6 @@ jobs:
             --export-binaries \
             "$DIR"
 
-
       # --------------------------------------------------------------------
       # COPY FIRMWARE
       # --------------------------------------------------------------------
@@ -345,9 +361,10 @@ jobs:
             echo "✅ Firmware salvo em: $DEST/firmware.bin"
           else
             echo "❌ Não encontrei o firmware compilado!"
+            echo "Arquivos .bin existentes:"
+            find "$BUILD" -type f -name "*.bin" || true
             exit 1
           fi
-
 
       # --------------------------------------------------------------------
       # ARTIFACTS
