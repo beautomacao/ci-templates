@@ -76,7 +76,6 @@ jobs:
           set -euo pipefail
 
           echo "Baixando arduino-cli binário oficial (linux 64)..."
-          # Você pode fixar versão se quiser (ex.: 0.35.3)
           URL="https://downloads.arduino.cc/arduino-cli/arduino-cli_latest_Linux_64bit.tar.gz"
 
           curl -fsSL "$URL" -o /tmp/arduino-cli.tar.gz
@@ -84,12 +83,17 @@ jobs:
 
           mkdir -p "$HOME/bin"
           mv /tmp/arduino-cli "$HOME/bin/arduino-cli"
-
           chmod +x "$HOME/bin/arduino-cli"
+
+          # Disponível neste step:
+          export PATH="$HOME/bin:$PATH"
+
+          # Disponível também para os próximos steps:
           echo "$HOME/bin" >> "$GITHUB_PATH"
 
           echo "Versão instalada:"
           arduino-cli version
+
 
       # --------------------------------------------------------------------
       # BOARD MANAGER URLs
