@@ -85,15 +85,13 @@ jobs:
           mv /tmp/arduino-cli "$HOME/bin/arduino-cli"
           chmod +x "$HOME/bin/arduino-cli"
 
-          # Disponível neste step:
+          # Disponível neste step
           export PATH="$HOME/bin:$PATH"
-
-          # Disponível também para os próximos steps:
+          # E nos próximos steps
           echo "$HOME/bin" >> "$GITHUB_PATH"
 
           echo "Versão instalada:"
           arduino-cli version
-
 
       # --------------------------------------------------------------------
       # BOARD MANAGER URLs
@@ -159,7 +157,7 @@ jobs:
           arduino-cli core list
 
       # --------------------------------------------------------------------
-      # INSTALL LIBRARIES (GLOBAL + EXTRA)
+      # INSTALL LIBRARIES (GLOBAL + EXTRA) — SEM PCF8574 AQUI
       # --------------------------------------------------------------------
       - name: Instalar bibliotecas (globais + extras)
         shell: bash
@@ -176,7 +174,6 @@ jobs:
           ArduinoJson@7.1.0
           OneWire
           DallasTemperature
-          PCF8574
           EOF
           )
 
@@ -211,7 +208,7 @@ jobs:
               fi
             fi
 
-            # Fallbacks GitHub específicos
+            # Fallbacks GitHub específicos (sem PCF8574 aqui)
             if [ "$ok" = false ]; then
               case "$lname" in
                 asyncmqttclient)
@@ -238,17 +235,6 @@ jobs:
                   cp -r /tmp/AsyncTCP ~/Arduino/libraries/AsyncTCP
                   ok=true
                   ;;
-
-                pcf8574)
-                  echo "→ Fallback GitHub: PCF8574_library (Renzo Mischianti / xreef)"
-                  # Remove qualquer versão instalada pelo Library Manager (ex.: RobTillaart)
-                  rm -rf ~/Arduino/libraries/PCF8574 || true
-                  git clone --depth 1 https://github.com/xreef/PCF8574_library.git /tmp/PCF8574
-                  mkdir -p ~/Arduino/libraries
-                  # mantemos o nome da pasta como PCF8574 para o include <PCF8574.h> continuar funcionando
-                  cp -r /tmp/PCF8574 ~/Arduino/libraries/PCF8574
-                  ok=true
-                  ;;
               esac
             fi
 
@@ -259,6 +245,25 @@ jobs:
 
             echo "✅ OK: $lib"
           done
+
+      # --------------------------------------------------------------------
+      # INSTALAR PCF8574 (XREEF) SEMPRE
+      # --------------------------------------------------------------------
+      - name: Forçar PCF8574 (Renzo/xreef)
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "→ Instalando PCF8574_library (Renzo Mischianti / xreef)"
+
+          mkdir -p ~/Arduino/libraries
+          rm -rf ~/Arduino/libraries/PCF8574 || true
+
+          git clone --depth 1 https://github.com/xreef/PCF8574_library.git /tmp/PCF8574
+          # Mantemos o nome da pasta como PCF8574 para #include <PCF8574.h> funcionar
+          cp -r /tmp/PCF8574 ~/Arduino/libraries/PCF8574
+
+          echo "Conteúdo da pasta PCF8574:"
+          ls -R ~/Arduino/libraries/PCF8574 || true
 
       # --------------------------------------------------------------------
       # FIX FORKS (ESP32/ESP8266)
