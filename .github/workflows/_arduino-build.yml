@@ -15,13 +15,13 @@ on:
         default: "*.ino"
 
       esp32_core_version:
-        description: "Versão do core ESP32; vazio para latest"
+        description: "Versão do core ESP32 (sempre explícita). Default: 3.3.2"
         required: false
         type: string
         default: "3.3.2"
 
       esp8266_core_version:
-        description: "Versão do core ESP8266; vazio para latest"
+        description: "Versão do core ESP8266 (sempre explícita). Default: 3.1.2"
         required: false
         type: string
         default: "3.1.2"
@@ -66,6 +66,21 @@ jobs:
       # --------------------------------------------------------------------
       - name: Checkout do repositório
         uses: actions/checkout@v4
+
+      # --------------------------------------------------------------------
+      # CACHE ARDUINO (CORES + LIBRARIES)
+      # --------------------------------------------------------------------
+      - name: Cache Arduino cores e bibliotecas
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.arduino15
+            ~/Arduino/libraries
+          key: >
+            arduino-${{ runner.os }}-${{ inputs.esp32_core_version }}-${{ inputs.esp8266_core_version }}-v1
+          restore-keys: |
+            arduino-${{ runner.os }}-${{ inputs.esp32_core_version }}-
+            arduino-${{ runner.os }}-
 
       # --------------------------------------------------------------------
       # INSTALAR ARDUINO CLI (SEM ACTION EXTERNA)
@@ -123,7 +138,7 @@ jobs:
           open("/tmp/fqbn.txt","w").write(fqbn)
 
       # --------------------------------------------------------------------
-      # INSTALL CORES
+      # INSTALL CORES (SEMPRE COM VERSÃO EXPLÍCITA)
       # --------------------------------------------------------------------
       - name: Instalar core do board
         shell: bash
@@ -134,18 +149,12 @@ jobs:
 
           case "$FQBN" in
             esp32:esp32:*)
-              if [ -n "${{ inputs.esp32_core_version }}" ]; then
-                arduino-cli core install "esp32:esp32@${{ inputs.esp32_core_version }}"
-              else
-                arduino-cli core install esp32:esp32
-              fi
+              echo "Instalando core ESP32 versão '${{ inputs.esp32_core_version }}'"
+              arduino-cli core install "esp32:esp32@${{ inputs.esp32_core_version }}"
               ;;
             esp8266:esp8266:*)
-              if [ -n "${{ inputs.esp8266_core_version }}" ]; then
-                arduino-cli core install "esp8266:esp8266@${{ inputs.esp8266_core_version }}"
-              else
-                arduino-cli core install esp8266:esp8266
-              fi
+              echo "Instalando core ESP8266 versão '${{ inputs.esp8266_core_version }}'"
+              arduino-cli core install "esp8266:esp8266@${{ inputs.esp8266_core_version }}"
               ;;
             *)
               echo "FQBN desconhecido: $FQBN"
@@ -315,8 +324,7 @@ jobs:
 
           for g in "${GLOBS[@]}"; do
             pat="$(echo "$g" | xargs)"
-            [ -z "$pat" ] && continue
-
+            [ -z "$pat" && continue ] || true
             while IFS= read -r -d '' f; do
               files+=("${f#./}")
             done < <(find . -path "./.git" -prune -o -type f -iname "$pat" -print0)
