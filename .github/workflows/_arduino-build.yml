@@ -50,7 +50,6 @@ on:
         type: boolean
         default: true
 
-
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -100,9 +99,7 @@ jobs:
           mv /tmp/arduino-cli "$HOME/bin/arduino-cli"
           chmod +x "$HOME/bin/arduino-cli"
 
-          # Disponível neste step
           export PATH="$HOME/bin:$PATH"
-          # E nos próximos steps
           echo "$HOME/bin" >> "$GITHUB_PATH"
 
           echo "Versão instalada:"
@@ -150,11 +147,11 @@ jobs:
           case "$FQBN" in
             esp32:esp32:*)
               echo "Instalando core ESP32 versão '${{ inputs.esp32_core_version }}'"
-              arduino-cli core install "esp32:esp32@${{ inputs.esp32_core_version }}"
+              arduino-cli core install "esp32:esp32@${{ inputs.esp32_core_version }}" || true
               ;;
             esp8266:esp8266:*)
               echo "Instalando core ESP8266 versão '${{ inputs.esp8266_core_version }}'"
-              arduino-cli core install "esp8266:esp8266@${{ inputs.esp8266_core_version }}"
+              arduino-cli core install "esp8266:esp8266@${{ inputs.esp8266_core_version }}" || true
               ;;
             *)
               echo "FQBN desconhecido: $FQBN"
@@ -172,6 +169,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          mkdir -p ~/Arduino/libraries
 
           echo "=== Montando lista de bibliotecas ==="
 
@@ -202,6 +200,13 @@ jobs:
 
             echo "-----------------------------"
             echo "Instalando '$lib'"
+
+            # Se já existe como pasta em ~/Arduino/libraries, NÃO reinstala (cache-friendly)
+            if [ -d "$HOME/Arduino/libraries/$name" ]; then
+              echo "✅ Já existe em cache: ~/Arduino/libraries/$name (pulando instalação)"
+              continue
+            fi
+
             ok=false
 
             # Tentativas via Library Manager
@@ -217,34 +222,31 @@ jobs:
               fi
             fi
 
-            # Fallbacks GitHub específicos (sem PCF8574 aqui)
+            # Fallbacks GitHub específicos (clona em pasta temporária única)
             if [ "$ok" = false ]; then
+              tmp="$(mktemp -d)"
               case "$lname" in
                 asyncmqttclient)
                   echo "→ Fallback GitHub: AsyncMqttClient"
-                  git clone --depth 1 https://github.com/marvinroger/async-mqtt-client.git /tmp/AsyncMqttClient
-                  mkdir -p ~/Arduino/libraries
-                  cp -r /tmp/AsyncMqttClient ~/Arduino/libraries/AsyncMqttClient
+                  git clone --depth 1 https://github.com/marvinroger/async-mqtt-client.git "$tmp/AsyncMqttClient"
+                  cp -r "$tmp/AsyncMqttClient" ~/Arduino/libraries/AsyncMqttClient
                   ok=true
                   ;;
-
                 espasyncwebserver)
                   echo "→ Fallback GitHub: ESPAsyncWebServer (ESP32Async)"
-                  git clone --depth 1 https://github.com/ESP32Async/ESPAsyncWebServer.git /tmp/ESPAsyncWebServer
-                  mkdir -p ~/Arduino/libraries
-                  cp -r /tmp/ESPAsyncWebServer ~/Arduino/libraries/ESPAsyncWebServer
+                  git clone --depth 1 https://github.com/ESP32Async/ESPAsyncWebServer.git "$tmp/ESPAsyncWebServer"
+                  cp -r "$tmp/ESPAsyncWebServer" ~/Arduino/libraries/ESPAsyncWebServer
                   ok=true
                   ;;
-
                 asynctcp)
                   echo "→ Fallback GitHub: AsyncTCP"
-                  git clone --depth 1 https://github.com/ESP32Async/AsyncTCP.git /tmp/AsyncTCP || \
-                  git clone --depth 1 https://github.com/me-no-dev/AsyncTCP.git /tmp/AsyncTCP
-                  mkdir -p ~/Arduino/libraries
-                  cp -r /tmp/AsyncTCP ~/Arduino/libraries/AsyncTCP
+                  git clone --depth 1 https://github.com/ESP32Async/AsyncTCP.git "$tmp/AsyncTCP" || \
+                  git clone --depth 1 https://github.com/me-no-dev/AsyncTCP.git "$tmp/AsyncTCP"
+                  cp -r "$tmp/AsyncTCP" ~/Arduino/libraries/AsyncTCP
                   ok=true
                   ;;
               esac
+              rm -rf "$tmp" || true
             fi
 
             if [ "$ok" = false ]; then
@@ -256,59 +258,104 @@ jobs:
           done
 
       # --------------------------------------------------------------------
-      # INSTALAR PCF8574 (XREEF) SEMPRE
+      # INSTALAR/REUSAR PCF8574 (XREEF) SEMPRE (cache-friendly)
       # --------------------------------------------------------------------
-      - name: Forçar PCF8574 (Renzo/xreef)
+      - name: Forçar PCF8574 (Renzo/xreef) — cache-friendly
         shell: bash
         run: |
           set -euo pipefail
-          echo "→ Instalando PCF8574_library (Renzo Mischianti / xreef)"
-
           mkdir -p ~/Arduino/libraries
-          rm -rf ~/Arduino/libraries/PCF8574 || true
 
-          git clone --depth 1 https://github.com/xreef/PCF8574_library.git /tmp/PCF8574
-          # Mantemos o nome da pasta como PCF8574 para #include <PCF8574.h> funcionar
-          cp -r /tmp/PCF8574 ~/Arduino/libraries/PCF8574
+          LIBDIR="$HOME/Arduino/libraries/PCF8574"
+          WANT_REMOTE="https://github.com/xreef/PCF8574_library.git"
+
+          is_xreef=false
+          if [ -d "$LIBDIR/.git" ]; then
+            cur="$(git -C "$LIBDIR" remote get-url origin 2>/dev/null || true)"
+            if [ "$cur" = "$WANT_REMOTE" ]; then
+              is_xreef=true
+            fi
+          else
+            # heurística: library.properties contendo "xreef" ou "Renzo" (caso não seja git)
+            if [ -f "$LIBDIR/library.properties" ] && grep -qiE 'xreef|Renzo' "$LIBDIR/library.properties"; then
+              is_xreef=true
+            fi
+          fi
+
+          if [ "$is_xreef" = true ]; then
+            echo "✅ PCF8574 já é xreef (reutilizando cache): $LIBDIR"
+            exit 0
+          fi
+
+          echo "→ Instalando PCF8574_library (Renzo Mischianti / xreef)"
+          rm -rf "$LIBDIR" || true
+
+          tmp="$(mktemp -d)"
+          git clone --depth 1 "$WANT_REMOTE" "$tmp/PCF8574"
+          cp -r "$tmp/PCF8574" "$LIBDIR"
+          rm -rf "$tmp" || true
 
           echo "Conteúdo da pasta PCF8574:"
-          ls -R ~/Arduino/libraries/PCF8574 || true
+          ls -R "$LIBDIR" || true
 
       # --------------------------------------------------------------------
-      # FIX FORKS (ESP32/ESP8266)
+      # FIX FORKS (ESP32/ESP8266) — cache-friendly
       # --------------------------------------------------------------------
-      - name: Fixar forks corretos (ESP32 vs ESP8266)
+      - name: Fixar forks corretos (ESP32 vs ESP8266) — cache-friendly
         shell: bash
         run: |
           set -euo pipefail
           FQBN="$(cat /tmp/fqbn.txt)"
           mkdir -p ~/Arduino/libraries
 
+          ensure_repo() {
+            local name="$1"
+            local want_url="$2"
+            local want_alt="$3"   # opcional
+            local dest="$HOME/Arduino/libraries/$name"
+
+            # se já existe e é git com remote correto -> reutiliza
+            if [ -d "$dest/.git" ]; then
+              cur="$(git -C "$dest" remote get-url origin 2>/dev/null || true)"
+              if [ "$cur" = "$want_url" ] || { [ -n "$want_alt" ] && [ "$cur" = "$want_alt" ]; }; then
+                echo "✅ Reutilizando cache: $name (origin=$cur)"
+                return 0
+              fi
+              echo "⚠️ $name existe, mas origin=$cur (esperado $want_url). Reinstalando fork correto..."
+              rm -rf "$dest" || true
+            elif [ -d "$dest" ]; then
+              echo "⚠️ $name existe mas não é git repo (pasta). Reinstalando fork correto..."
+              rm -rf "$dest" || true
+            fi
+
+            tmp="$(mktemp -d)"
+            echo "→ Clonando $name: $want_url"
+            git clone --depth 1 "$want_url" "$tmp/$name" || {
+              if [ -n "$want_alt" ]; then
+                echo "→ Clone falhou, tentando alternativa: $want_alt"
+                git clone --depth 1 "$want_alt" "$tmp/$name"
+              else
+                exit 1
+              fi
+            }
+            cp -r "$tmp/$name" "$dest"
+            rm -rf "$tmp" || true
+          }
+
           if echo "$FQBN" | grep -qi '^esp32:esp32:'; then
-            echo "→ Usando forks ESP32Async"
-            rm -rf ~/Arduino/libraries/AsyncTCP ~/Arduino/libraries/ESPAsyncWebServer || true
-
-            git clone --depth 1 https://github.com/ESP32Async/AsyncTCP.git /tmp/AsyncTCP
-            git clone --depth 1 https://github.com/ESP32Async/ESPAsyncWebServer.git /tmp/ESPAsyncWebServer
-
-            cp -r /tmp/AsyncTCP ~/Arduino/libraries/AsyncTCP
-            cp -r /tmp/ESPAsyncWebServer ~/Arduino/libraries/ESPAsyncWebServer
-
+            echo "→ ESP32: garantindo forks ESP32Async"
+            ensure_repo "AsyncTCP" "https://github.com/ESP32Async/AsyncTCP.git" ""
+            ensure_repo "ESPAsyncWebServer" "https://github.com/ESP32Async/ESPAsyncWebServer.git" ""
           elif echo "$FQBN" | grep -qi '^esp8266:esp8266:'; then
-            echo "→ Usando libs originais (me-no-dev)"
-            rm -rf ~/Arduino/libraries/AsyncTCP ~/Arduino/libraries/ESPAsyncWebServer || true
-
-            git clone --depth 1 https://github.com/me-no-dev/AsyncTCP.git /tmp/AsyncTCP
-            git clone --depth 1 https://github.com/me-no-dev/ESPAsyncWebServer.git /tmp/ESPAsyncWebServer
-
-            cp -r /tmp/AsyncTCP ~/Arduino/libraries/AsyncTCP
-            cp -r /tmp/ESPAsyncWebServer ~/Arduino/libraries/ESPAsyncWebServer
+            echo "→ ESP8266: garantindo libs me-no-dev"
+            ensure_repo "AsyncTCP" "https://github.com/me-no-dev/AsyncTCP.git" ""
+            ensure_repo "ESPAsyncWebServer" "https://github.com/me-no-dev/ESPAsyncWebServer.git" ""
           else
             echo "→ FQBN não é ESP32 nem ESP8266; nenhum fork especial aplicado."
           fi
 
           echo "=== Bibliotecas instaladas ==="
-          ls -1 ~/Arduino/libraries
+          ls -1 ~/Arduino/libraries || true
 
       # --------------------------------------------------------------------
       # FIND .INO
@@ -324,7 +371,7 @@ jobs:
 
           for g in "${GLOBS[@]}"; do
             pat="$(echo "$g" | xargs)"
-            [ -z "$pat" && continue ] || true
+            [ -z "$pat" ] && continue
             while IFS= read -r -d '' f; do
               files+=("${f#./}")
             done < <(find . -path "./.git" -prune -o -type f -iname "$pat" -print0)
