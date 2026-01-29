@@ -48,7 +48,13 @@ on:
         description: "Compilar + publicar artefatos (firmware/<repo>.bin)"
         required: false
         type: boolean
-        default: false   # ✅ PADRÃO DESLIGADO (economiza quota)
+        default: false  # ✅ padrão desligado
+
+      artifact_name:
+        description: "Nome do artifact (útil para matrix: firmware-A6/firmware-A8/firmware-A16)"
+        required: false
+        type: string
+        default: "firmware"  # ✅ default mantém compatibilidade com outros repos
 
 jobs:
   build:
@@ -88,20 +94,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           echo "Baixando arduino-cli binário oficial (linux 64)..."
           URL="https://downloads.arduino.cc/arduino-cli/arduino-cli_latest_Linux_64bit.tar.gz"
-
           curl -fsSL "$URL" -o /tmp/arduino-cli.tar.gz
           tar -xzf /tmp/arduino-cli.tar.gz -C /tmp
-
           mkdir -p "$HOME/bin"
           mv /tmp/arduino-cli "$HOME/bin/arduino-cli"
           chmod +x "$HOME/bin/arduino-cli"
-
           export PATH="$HOME/bin:$PATH"
           echo "$HOME/bin" >> "$GITHUB_PATH"
-
           echo "Versão instalada:"
           arduino-cli version
 
@@ -172,8 +173,6 @@ jobs:
           set -euo pipefail
           mkdir -p ~/Arduino/libraries
 
-          echo "=== Montando lista de bibliotecas ==="
-
           BASE_LIBS=$(cat << 'EOF'
           LiquidCrystal I2C
           AsyncMqttClient
@@ -188,9 +187,6 @@ jobs:
           EXTRA_LIBS="${{ inputs.arduino_libs }}"
           ALL_LIBS=$(printf "%s\n%s\n" "$BASE_LIBS" "$EXTRA_LIBS")
 
-          echo "=== Bibliotecas a instalar ==="
-          echo "$ALL_LIBS" | awk 'NF'
-
           echo "$ALL_LIBS" | awk 'NF' | while read -r raw; do
             lib="$(echo "$raw" | tr -d '\r' | xargs)"
             [ -z "$lib" ] && continue
@@ -199,23 +195,16 @@ jobs:
             ver="${lib#*@}"; [ "$ver" = "$name" ] && ver=""
             lname="$(echo "$name" | tr '[:upper:]' '[:lower:]')"
 
-            echo "-----------------------------"
-            echo "Instalando '$lib'"
-
-            # Se já existe como pasta em ~/Arduino/libraries, NÃO reinstala (cache-friendly)
             if [ -d "$HOME/Arduino/libraries/$name" ]; then
-              echo "✅ Já existe em cache: ~/Arduino/libraries/$name (pulando instalação)"
+              echo "✅ Cache OK: $name"
               continue
             fi
 
             ok=false
-
-            # Tentativas via Library Manager
             if arduino-cli lib install "$lib"; then ok=true; fi
             if [ "$ok" = false ] && [ -n "$ver" ]; then arduino-cli lib install "$name@$ver" && ok=true || true; fi
             if [ "$ok" = false ]; then arduino-cli lib install "$name" && ok=true || true; fi
 
-            # Alias com "_" -> " "
             if [ "$ok" = false ]; then
               alt="$(echo "$name" | sed 's/_/ /g')"
               if [ "$alt" != "$name" ]; then
@@ -223,24 +212,20 @@ jobs:
               fi
             fi
 
-            # Fallbacks GitHub específicos (clona em pasta temporária única)
             if [ "$ok" = false ]; then
               tmp="$(mktemp -d)"
               case "$lname" in
                 asyncmqttclient)
-                  echo "→ Fallback GitHub: AsyncMqttClient"
                   git clone --depth 1 https://github.com/marvinroger/async-mqtt-client.git "$tmp/AsyncMqttClient"
                   cp -r "$tmp/AsyncMqttClient" ~/Arduino/libraries/AsyncMqttClient
                   ok=true
                   ;;
                 espasyncwebserver)
-                  echo "→ Fallback GitHub: ESPAsyncWebServer (ESP32Async)"
                   git clone --depth 1 https://github.com/ESP32Async/ESPAsyncWebServer.git "$tmp/ESPAsyncWebServer"
                   cp -r "$tmp/ESPAsyncWebServer" ~/Arduino/libraries/ESPAsyncWebServer
                   ok=true
                   ;;
                 asynctcp)
-                  echo "→ Fallback GitHub: AsyncTCP"
                   git clone --depth 1 https://github.com/ESP32Async/AsyncTCP.git "$tmp/AsyncTCP" || \
                   git clone --depth 1 https://github.com/me-no-dev/AsyncTCP.git "$tmp/AsyncTCP"
                   cp -r "$tmp/AsyncTCP" ~/Arduino/libraries/AsyncTCP
@@ -254,12 +239,10 @@ jobs:
               echo "❌ Não foi possível instalar '$lib'"
               exit 1
             fi
-
-            echo "✅ OK: $lib"
           done
 
       # --------------------------------------------------------------------
-      # INSTALAR/REUSAR PCF8574 (XREEF) SEMPRE (cache-friendly)
+      # PCF8574 (XREEF) — cache-friendly
       # --------------------------------------------------------------------
       - name: Forçar PCF8574 (Renzo/xreef) — cache-friendly
         shell: bash
@@ -283,20 +266,15 @@ jobs:
           fi
 
           if [ "$is_xreef" = true ]; then
-            echo "✅ PCF8574 já é xreef (reutilizando cache): $LIBDIR"
+            echo "✅ PCF8574 OK (cache)"
             exit 0
           fi
 
-          echo "→ Instalando PCF8574_library (Renzo Mischianti / xreef)"
           rm -rf "$LIBDIR" || true
-
           tmp="$(mktemp -d)"
           git clone --depth 1 "$WANT_REMOTE" "$tmp/PCF8574"
           cp -r "$tmp/PCF8574" "$LIBDIR"
           rm -rf "$tmp" || true
-
-          echo "Conteúdo da pasta PCF8574:"
-          ls -R "$LIBDIR" || true
 
       # --------------------------------------------------------------------
       # FIX FORKS (ESP32/ESP8266) — cache-friendly
@@ -311,50 +289,32 @@ jobs:
           ensure_repo() {
             local name="$1"
             local want_url="$2"
-            local want_alt="$3"
             local dest="$HOME/Arduino/libraries/$name"
 
             if [ -d "$dest/.git" ]; then
               cur="$(git -C "$dest" remote get-url origin 2>/dev/null || true)"
-              if [ "$cur" = "$want_url" ] || { [ -n "$want_alt" ] && [ "$cur" = "$want_alt" ]; }; then
-                echo "✅ Reutilizando cache: $name (origin=$cur)"
+              if [ "$cur" = "$want_url" ]; then
+                echo "✅ Cache OK: $name"
                 return 0
               fi
-              echo "⚠️ $name existe, mas origin=$cur (esperado $want_url). Reinstalando fork correto..."
               rm -rf "$dest" || true
             elif [ -d "$dest" ]; then
-              echo "⚠️ $name existe mas não é git repo (pasta). Reinstalando fork correto..."
               rm -rf "$dest" || true
             fi
 
             tmp="$(mktemp -d)"
-            echo "→ Clonando $name: $want_url"
-            git clone --depth 1 "$want_url" "$tmp/$name" || {
-              if [ -n "$want_alt" ]; then
-                echo "→ Clone falhou, tentando alternativa: $want_alt"
-                git clone --depth 1 "$want_alt" "$tmp/$name"
-              else
-                exit 1
-              fi
-            }
+            git clone --depth 1 "$want_url" "$tmp/$name"
             cp -r "$tmp/$name" "$dest"
             rm -rf "$tmp" || true
           }
 
           if echo "$FQBN" | grep -qi '^esp32:esp32:'; then
-            echo "→ ESP32: garantindo forks ESP32Async"
-            ensure_repo "AsyncTCP" "https://github.com/ESP32Async/AsyncTCP.git" ""
-            ensure_repo "ESPAsyncWebServer" "https://github.com/ESP32Async/ESPAsyncWebServer.git" ""
+            ensure_repo "AsyncTCP" "https://github.com/ESP32Async/AsyncTCP.git"
+            ensure_repo "ESPAsyncWebServer" "https://github.com/ESP32Async/ESPAsyncWebServer.git"
           elif echo "$FQBN" | grep -qi '^esp8266:esp8266:'; then
-            echo "→ ESP8266: garantindo libs me-no-dev"
-            ensure_repo "AsyncTCP" "https://github.com/me-no-dev/AsyncTCP.git" ""
-            ensure_repo "ESPAsyncWebServer" "https://github.com/me-no-dev/ESPAsyncWebServer.git" ""
-          else
-            echo "→ FQBN não é ESP32 nem ESP8266; nenhum fork especial aplicado."
+            ensure_repo "AsyncTCP" "https://github.com/me-no-dev/AsyncTCP.git"
+            ensure_repo "ESPAsyncWebServer" "https://github.com/me-no-dev/ESPAsyncWebServer.git"
           fi
-
-          echo "=== Bibliotecas instaladas ==="
-          ls -1 ~/Arduino/libraries || true
 
       # --------------------------------------------------------------------
       # FIND .INO
@@ -364,7 +324,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           IFS=',' read -ra GLOBS <<< "${SKETCHES_GLOB}"
           files=()
 
@@ -406,7 +365,6 @@ jobs:
             done
           fi
 
-          echo "Compilando: $SKETCH  (FQBN=$FQBN)"
           arduino-cli compile \
             --fqbn "$FQBN" \
             --build-property compiler.cpp.extra_flags="${EXTRA_BUILD_FLAGS}" \
@@ -422,7 +380,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           REPO_NAME="${{ github.event.repository.name }}"
           SKETCH="${{ steps.find-sketch.outputs.SKETCH }}"
           DIR="$(dirname "$SKETCH")"
@@ -430,20 +387,16 @@ jobs:
           TARGET="$(basename "$SKETCH" .ino)"
 
           BIN_ORIG="$(find "$BUILD" -type f -name "${TARGET}.ino.bin" | head -n 1 || true)"
-
-          DEST="$DIR/firmware"
-          mkdir -p "$DEST"
-
-          if [ -n "$BIN_ORIG" ] && [ -f "$BIN_ORIG" ]; then
-            cp -f "$BIN_ORIG" "$DEST/${REPO_NAME}.bin"
-            echo "✅ Firmware salvo em: $DEST/${REPO_NAME}.bin"
-            ls -lh "$DEST/${REPO_NAME}.bin"
-          else
-            echo "❌ Não encontrei o firmware compilado (${TARGET}.ino.bin)!"
-            echo "Arquivos .bin existentes em $BUILD:"
+          if [ -z "$BIN_ORIG" ] || [ ! -f "$BIN_ORIG" ]; then
+            echo "❌ Não encontrei ${TARGET}.ino.bin"
             find "$BUILD" -type f -name "*.bin" -print || true
             exit 1
           fi
+
+          DEST="$DIR/firmware"
+          mkdir -p "$DEST"
+          cp -f "$BIN_ORIG" "$DEST/${REPO_NAME}.bin"
+          ls -lh "$DEST/${REPO_NAME}.bin"
 
       # --------------------------------------------------------------------
       # ARTIFACTS (somente BIN padronizado)
@@ -452,7 +405,7 @@ jobs:
         if: ${{ inputs.upload_artifacts }}
         uses: actions/upload-artifact@v4
         with:
-          name: firmware
+          name: ${{ inputs.artifact_name }}
           path: |
             **/firmware/${{ github.event.repository.name }}.bin
           if-no-files-found: error
