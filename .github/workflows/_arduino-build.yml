@@ -48,7 +48,7 @@ on:
         description: "Compilar + publicar artefatos (firmware/<repo>.bin)"
         required: false
         type: boolean
-        default: true  # ✅ padrão desligado
+        default: false  # ✅ padrão desligado
 
       artifact_name:
         description: "Nome do artifact (útil para matrix: firmware-A6/firmware-A8/firmware-A16)"
